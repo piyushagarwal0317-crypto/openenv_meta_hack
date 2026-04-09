@@ -38,16 +38,25 @@ BENCHMARK_URL = os.getenv("BENCHMARK_URL", "http://localhost:8000")
 BENCHMARK = os.getenv("BENCHMARK", "cloudscale_rl")
 MAX_STEPS = int(os.getenv("MAX_STEPS", "0"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
-MAX_TOKENS = int(os.getenv("MAX_TOKENS", "120"))
+MAX_TOKENS = int(os.getenv("MAX_TOKENS", "150"))
 TASKS = ["easy", "medium", "hard"]
 
 
 SYSTEM_PROMPT = (
-    "You are a cloud infrastructure SRE agent managing pod autoscaling. "
-    "Return exactly one JSON object with key: scale_delta (integer, one of -2, -1, 0, 1, 2). "
-    "Positive values add pods, negative values remove pods, 0 holds steady. "
-    "Prefer scaling up early when latency or queue pressure rises, "
-    "scale down conservatively when CPU is low, and avoid oscillating."
+    "You are a cloud infrastructure SRE agent managing Kubernetes-like autoscaling. "
+    "You control three scaling dimensions:\n"
+    "1. HPA (Horizontal Pod Autoscaler): scale_delta (-2 to +2) to add/remove pods\n"
+    "2. Cluster Autoscaler: node_delta (-1, 0, +1) to add/remove worker nodes\n"
+    "3. VPA (Vertical Pod Autoscaler): pod_size ('xs','sm','md','lg' or null) to resize pods\n\n"
+    "Return exactly one JSON object: {\"scale_delta\": N, \"node_delta\": M, \"pod_size\": S}\n"
+    "where N is -2,-1,0,1,2 and M is -1,0,1 and S is 'xs','sm','md','lg' or null.\n\n"
+    "Key rules:\n"
+    "- Scale pods up early when latency or queue pressure rises\n"
+    "- Add nodes when pod scheduling fails or node CPU/memory > 85%\n"
+    "- Use VPA to right-size pods: bigger pods = more capacity but higher cost\n"
+    "- Nodes take much longer to provision than pods — plan ahead\n"
+    "- Avoid oscillating between actions\n"
+    "- Watch for infrastructure events (flash crowds, DDoS, node failures)"
 )
 
 
@@ -116,12 +125,21 @@ def build_user_prompt(step: int, obs: dict[str, Any], rewards: list[float]) -> s
     avg_rate = traffic.get("recent_avg_request_rate", 0)
     peak_rate = traffic.get("recent_peak_request_rate", 0)
 
+    # Node info
+    node_info = obs.get("node_info") or {}
+    pod_res = obs.get("pod_resource_info") or {}
+
+    # Recent events
+    events = obs.get("recent_events") or []
+    event_strs = [f"{e.get('event_type', '?')}: {e.get('details', '')}" for e in events[-3:]]
+
     summary = {
         "step": step,
         "task": obs.get("task_id"),
         "time_step": obs.get("time_step"),
         "horizon": obs.get("horizon"),
         "cpu_utilization_pct": round(float(obs.get("cpu_utilization", 0)) * 100, 1),
+        "memory_utilization_pct": round(float(obs.get("memory_utilization", 0)) * 100, 1),
         "latency_ms": round(float(obs.get("latency_ms", 0)), 1),
         "request_rate": round(float(obs.get("request_rate", 0)), 1),
         "queue_length": int(obs.get("queue_length", 0)),
@@ -131,13 +149,27 @@ def build_user_prompt(step: int, obs: dict[str, Any], rewards: list[float]) -> s
         "traffic_trend": trend,
         "avg_request_rate": round(float(avg_rate), 1),
         "peak_request_rate": round(float(peak_rate), 1),
+        # node info
+        "active_nodes": int(node_info.get("active_nodes", 0)),
+        "pending_node_ups": int(node_info.get("pending_node_ups", 0)),
+        "node_cpu_capacity": round(float(node_info.get("node_cpu_capacity", 0)), 1),
+        "node_cpu_used": round(float(node_info.get("node_cpu_used", 0)), 1),
+        "node_memory_capacity_gb": round(float(node_info.get("node_memory_capacity_gb", 0)), 1),
+        "node_memory_used_gb": round(float(node_info.get("node_memory_used_gb", 0)), 1),
+        # VPA info
+        "pod_size": pod_res.get("pod_size", "sm"),
+        "pod_capacity": round(float(pod_res.get("pod_capacity", 500)), 0),
+        "vpa_restart_in_progress": pod_res.get("vpa_restart_in_progress", False),
+        # KPIs
         "total_sla_violations": int(obs.get("total_sla_violations", 0)),
         "total_requests_dropped": int(obs.get("total_requests_dropped", 0)),
         "average_latency_ms": round(float(obs.get("average_latency_ms", 0)), 1),
         "recent_rewards": [round(r, 2) for r in rewards[-5:]],
+        "recent_events": event_strs,
     }
     return (
-        "Choose one scaling action as JSON: {\"scale_delta\": N} where N is -2,-1,0,1,2.\n"
+        "Choose one scaling action as JSON: "
+        "{\"scale_delta\": N, \"node_delta\": M, \"pod_size\": S}\n"
         + json.dumps(summary, ensure_ascii=True)
     )
 
@@ -157,11 +189,22 @@ def parse_action(text: str) -> dict[str, Any]:
             obj = json.loads(match.group(0))
             delta = int(obj.get("scale_delta", 0))
             delta = max(-2, min(2, delta))
-            return {"scale_delta": delta}
+
+            node_delta = int(obj.get("node_delta", 0))
+            node_delta = max(-1, min(1, node_delta))
+
+            pod_size = obj.get("pod_size", None)
+            if pod_size not in ("xs", "sm", "md", "lg", None):
+                pod_size = None
+
+            result = {"scale_delta": delta, "node_delta": node_delta}
+            if pod_size is not None:
+                result["pod_size"] = pod_size
+            return result
         except Exception:
             pass
 
-    # Try bare integer
+    # Try bare integer (legacy fallback)
     match = re.search(r"(-?[0-2])", text)
     if match:
         return {"scale_delta": int(match.group(1))}
@@ -218,21 +261,44 @@ def choose_fallback_action(obs: dict[str, Any]) -> dict[str, Any]:
     pending_downs = int(obs.get("pending_scale_downs", 0))
     active_pods = int(obs.get("active_pods", 0))
 
+    # Node info
+    node_info = obs.get("node_info") or {}
+    node_cpu_cap = float(node_info.get("node_cpu_capacity", 1))
+    node_cpu_used = float(node_info.get("node_cpu_used", 0))
+    active_nodes = int(node_info.get("active_nodes", 1))
+    pending_node_ups = int(node_info.get("pending_node_ups", 0))
+
+    scale_delta = 0
+    node_delta = 0
+    pod_size = None
+
+    # --- Pod scaling (HPA) ---
     # Aggressive scale-up if latency spike or large queue
     if latency > 300 or queue > 2000:
         if pending_ups == 0:
-            return {"scale_delta": 2}
+            scale_delta = 2
 
     # Moderate scale-up if above SLA or high CPU
-    if cpu > 0.85 or latency > 150 or queue > 500:
+    elif cpu > 0.85 or latency > 150 or queue > 500:
         if pending_ups == 0:
-            return {"scale_delta": 1}
+            scale_delta = 1
 
     # Scale down if very low utilisation and no queue
-    if cpu < 0.2 and queue == 0 and active_pods > 1 and pending_downs == 0:
-        return {"scale_delta": -1}
+    elif cpu < 0.2 and queue == 0 and active_pods > 1 and pending_downs == 0:
+        scale_delta = -1
 
-    return {"scale_delta": 0}
+    # --- Node scaling (Cluster Autoscaler) ---
+    if node_cpu_cap > 0:
+        node_cpu_ratio = node_cpu_used / node_cpu_cap
+        if node_cpu_ratio > 0.85 and pending_node_ups == 0:
+            node_delta = 1
+        elif node_cpu_ratio < 0.2 and active_nodes > 1:
+            node_delta = -1
+
+    result = {"scale_delta": scale_delta, "node_delta": node_delta}
+    if pod_size is not None:
+        result["pod_size"] = pod_size
+    return result
 
 
 def choose_unsticking_action(obs: dict[str, Any]) -> dict[str, Any]:

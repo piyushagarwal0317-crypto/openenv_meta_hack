@@ -1,0 +1,857 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudScaleRL — Kubernetes Autoscaling Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-primary: #0a0e1a;
+            --bg-secondary: #111827;
+            --bg-card: #1a2035;
+            --bg-card-hover: #1f2847;
+            --border: #2a3550;
+            --border-glow: #3b82f6;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --accent-blue: #3b82f6;
+            --accent-cyan: #06b6d4;
+            --accent-green: #10b981;
+            --accent-amber: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-purple: #8b5cf6;
+            --accent-pink: #ec4899;
+            --gradient-blue: linear-gradient(135deg, #3b82f6, #06b6d4);
+            --gradient-green: linear-gradient(135deg, #10b981, #34d399);
+            --gradient-red: linear-gradient(135deg, #ef4444, #f97316);
+            --gradient-purple: linear-gradient(135deg, #8b5cf6, #ec4899);
+            --shadow-glow: 0 0 20px rgba(59, 130, 246, 0.15);
+            --radius: 12px;
+            --radius-sm: 8px;
+        }
+
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* --- Header --- */
+        .header {
+            background: linear-gradient(180deg, rgba(59,130,246,0.08) 0%, transparent 100%);
+            border-bottom: 1px solid var(--border);
+            padding: 16px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            backdrop-filter: blur(12px);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+        .header-left { display: flex; align-items: center; gap: 16px; }
+        .logo {
+            font-size: 22px;
+            font-weight: 800;
+            background: var(--gradient-blue);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.5px;
+        }
+        .logo-sub {
+            font-size: 12px;
+            color: var(--text-muted);
+            font-weight: 500;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+        }
+        .header-right { display: flex; align-items: center; gap: 12px; }
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(16, 185, 129, 0.12);
+            color: var(--accent-green);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+        .status-dot {
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: var(--accent-green);
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* --- Main Grid --- */
+        .main { padding: 24px 32px; display: flex; flex-direction: column; gap: 24px; }
+
+        /* --- Control Bar --- */
+        .control-bar {
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+        .control-group {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 8px 16px;
+        }
+        .control-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+        select, input[type="number"] {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: var(--radius-sm);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        select:focus, input:focus { border-color: var(--accent-blue); }
+        input[type="number"] { width: 60px; }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 18px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border);
+            background: var(--bg-card);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+            white-space: nowrap;
+        }
+        .btn:hover { background: var(--bg-card-hover); border-color: var(--accent-blue); transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+        .btn-primary { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+        .btn-primary:hover { background: #2563eb; box-shadow: 0 0 16px rgba(59,130,246,0.3); }
+        .btn-green { background: rgba(16,185,129,0.15); border-color: rgba(16,185,129,0.3); color: var(--accent-green); }
+        .btn-green:hover { background: rgba(16,185,129,0.25); }
+        .btn-red { background: rgba(239,68,68,0.12); border-color: rgba(239,68,68,0.25); color: var(--accent-red); }
+        .btn-red:hover { background: rgba(239,68,68,0.22); }
+        .btn-amber { background: rgba(245,158,11,0.12); border-color: rgba(245,158,11,0.25); color: var(--accent-amber); }
+        .btn-amber:hover { background: rgba(245,158,11,0.22); }
+        .btn-purple { background: rgba(139,92,246,0.12); border-color: rgba(139,92,246,0.25); color: var(--accent-purple); }
+        .btn-purple:hover { background: rgba(139,92,246,0.22); }
+        .btn-pink { background: rgba(236,72,153,0.12); border-color: rgba(236,72,153,0.25); color: var(--accent-pink); }
+        .btn-pink:hover { background: rgba(236,72,153,0.22); }
+
+        /* --- Metric Cards Grid --- */
+        .metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 12px;
+        }
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 16px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.25s;
+        }
+        .metric-card:hover { border-color: var(--border-glow); box-shadow: var(--shadow-glow); transform: translateY(-2px); }
+        .metric-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 3px;
+            border-radius: var(--radius) var(--radius) 0 0;
+        }
+        .metric-card.blue::before { background: var(--gradient-blue); }
+        .metric-card.green::before { background: var(--gradient-green); }
+        .metric-card.red::before { background: var(--gradient-red); }
+        .metric-card.purple::before { background: var(--gradient-purple); }
+        .metric-card.amber::before { background: linear-gradient(135deg, #f59e0b, #fbbf24); }
+        .metric-card.cyan::before { background: linear-gradient(135deg, #06b6d4, #22d3ee); }
+        .metric-label {
+            font-size: 11px;
+            font-weight: 600;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            margin-bottom: 8px;
+        }
+        .metric-value {
+            font-size: 28px;
+            font-weight: 800;
+            font-family: 'JetBrains Mono', monospace;
+            letter-spacing: -1px;
+        }
+        .metric-sub {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* --- Charts --- */
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 1200px) { .charts-grid { grid-template-columns: 1fr; } }
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            transition: all 0.25s;
+        }
+        .chart-card:hover { border-color: var(--border-glow); }
+        .chart-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .chart-title .dot {
+            width: 10px; height: 10px;
+            border-radius: 50%;
+        }
+        canvas { max-height: 220px; }
+
+        /* --- Spike Injection Panel --- */
+        .spike-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+        }
+        .spike-title {
+            font-size: 14px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .spike-buttons {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .spike-btn {
+            padding: 12px 20px;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: var(--bg-secondary);
+            color: var(--text-primary);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            min-width: 160px;
+        }
+        .spike-btn:hover { transform: translateY(-2px); }
+        .spike-btn .icon { font-size: 20px; }
+        .spike-btn .desc { font-size: 10px; color: var(--text-muted); font-weight: 400; }
+        .spike-btn.flash:hover { border-color: var(--accent-amber); background: rgba(245,158,11,0.08); box-shadow: 0 0 20px rgba(245,158,11,0.15); }
+        .spike-btn.ddos:hover { border-color: var(--accent-red); background: rgba(239,68,68,0.08); box-shadow: 0 0 20px rgba(239,68,68,0.15); }
+        .spike-btn.ramp:hover { border-color: var(--accent-purple); background: rgba(139,92,246,0.08); box-shadow: 0 0 20px rgba(139,92,246,0.15); }
+        .spike-btn.herd:hover { border-color: var(--accent-pink); background: rgba(236,72,153,0.08); box-shadow: 0 0 20px rgba(236,72,153,0.15); }
+
+        /* --- Events Log --- */
+        .events-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .events-panel::-webkit-scrollbar { width: 6px; }
+        .events-panel::-webkit-scrollbar-track { background: transparent; }
+        .events-panel::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+        .event-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(42,53,80,0.5);
+            font-size: 12px;
+            animation: fadeIn 0.3s ease;
+        }
+        @keyframes fadeIn { from { opacity: 0; transform: translateX(-10px); } to { opacity: 1; transform: translateX(0); } }
+        .event-step {
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 600;
+            color: var(--text-muted);
+            min-width: 50px;
+        }
+        .event-badge {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            min-width: 90px;
+            text-align: center;
+        }
+        .event-badge.flash_crowd { background: rgba(245,158,11,0.15); color: var(--accent-amber); }
+        .event-badge.ddos_attack { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .event-badge.gradual_ramp { background: rgba(139,92,246,0.15); color: var(--accent-purple); }
+        .event-badge.thundering_herd { background: rgba(236,72,153,0.15); color: var(--accent-pink); }
+        .event-badge.node_failure { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .event-badge.node_recovered { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+        .event-badge.node_provisioning { background: rgba(59,130,246,0.15); color: var(--accent-blue); }
+        .event-badge.node_ready { background: rgba(16,185,129,0.15); color: var(--accent-green); }
+        .event-badge.vpa_restart { background: rgba(139,92,246,0.15); color: var(--accent-purple); }
+        .event-badge.pod_unschedulable { background: rgba(245,158,11,0.15); color: var(--accent-amber); }
+        .event-badge.pod_evicted { background: rgba(239,68,68,0.15); color: var(--accent-red); }
+        .event-details { color: var(--text-secondary); flex: 1; }
+
+        /* --- Bottom row --- */
+        .bottom-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+        @media (max-width: 1000px) { .bottom-grid { grid-template-columns: 1fr; } }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            padding: 12px 20px;
+            border-radius: var(--radius-sm);
+            font-size: 13px;
+            font-weight: 600;
+            z-index: 1000;
+            animation: slideUp 0.3s ease;
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { background: rgba(16,185,129,0.9); color: #fff; }
+        .toast.error { background: rgba(239,68,68,0.9); color: #fff; }
+        .toast.info { background: rgba(59,130,246,0.9); color: #fff; }
+        @keyframes slideUp { from { transform: translateY(20px); } to { transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-left">
+            <div>
+                <div class="logo">☁️ CloudScaleRL</div>
+                <div class="logo-sub">Kubernetes Autoscaling Dashboard</div>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status-badge">
+                <span class="status-dot"></span>
+                <span id="statusText">Ready</span>
+            </div>
+            <span style="font-size:12px;color:var(--text-muted)">Step <strong id="stepCounter" style="color:var(--text-primary)">0</strong> / <span id="horizonCounter">180</span></span>
+        </div>
+    </div>
+
+    <div class="main">
+        <!-- Control Bar -->
+        <div class="control-bar">
+            <div class="control-group">
+                <span class="control-label">Task</span>
+                <select id="taskSelect">
+                    <option value="easy">Easy</option>
+                    <option value="medium">Medium</option>
+                    <option value="hard">Hard</option>
+                </select>
+            </div>
+            <button class="btn btn-primary" onclick="resetEnv()">⟳ Reset</button>
+            <div class="control-group">
+                <span class="control-label">Scale Δ</span>
+                <select id="scaleDelta">
+                    <option value="-2">-2</option>
+                    <option value="-1">-1</option>
+                    <option value="0" selected>0</option>
+                    <option value="1">+1</option>
+                    <option value="2">+2</option>
+                </select>
+                <span class="control-label">Node Δ</span>
+                <select id="nodeDelta">
+                    <option value="-1">-1</option>
+                    <option value="0" selected>0</option>
+                    <option value="1">+1</option>
+                </select>
+                <span class="control-label">Pod Size</span>
+                <select id="podSize">
+                    <option value="">Keep</option>
+                    <option value="xs">XS</option>
+                    <option value="sm">SM</option>
+                    <option value="md">MD</option>
+                    <option value="lg">LG</option>
+                </select>
+            </div>
+            <button class="btn btn-green" onclick="manualStep()">▶ Step</button>
+            <button class="btn btn-green" onclick="autoRun(10)">▶▶ Run 10</button>
+            <button class="btn btn-green" onclick="autoRun(50)">⏩ Run 50</button>
+            <button class="btn btn-amber" id="autoPlayBtn" onclick="toggleAutoPlay()">⏯ Auto-Play</button>
+        </div>
+
+        <!-- Metrics Cards -->
+        <div class="metrics-grid">
+            <div class="metric-card blue">
+                <div class="metric-label">CPU Utilization</div>
+                <div class="metric-value" id="mCpu">0%</div>
+                <div class="metric-sub" id="mCpuSub">No data</div>
+            </div>
+            <div class="metric-card cyan">
+                <div class="metric-label">Memory Utilization</div>
+                <div class="metric-value" id="mMem">0%</div>
+                <div class="metric-sub" id="mMemSub">No data</div>
+            </div>
+            <div class="metric-card green">
+                <div class="metric-label">Latency</div>
+                <div class="metric-value" id="mLat">0 ms</div>
+                <div class="metric-sub" id="mLatSub">SLA: —</div>
+            </div>
+            <div class="metric-card purple">
+                <div class="metric-label">Request Rate</div>
+                <div class="metric-value" id="mReq">0</div>
+                <div class="metric-sub">req/s</div>
+            </div>
+            <div class="metric-card amber">
+                <div class="metric-label">Active Pods</div>
+                <div class="metric-value" id="mPods">0</div>
+                <div class="metric-sub" id="mPodsSub">Size: sm</div>
+            </div>
+            <div class="metric-card cyan">
+                <div class="metric-label">Active Nodes</div>
+                <div class="metric-value" id="mNodes">0</div>
+                <div class="metric-sub" id="mNodesSub">Type: medium</div>
+            </div>
+            <div class="metric-card red">
+                <div class="metric-label">Queue Length</div>
+                <div class="metric-value" id="mQueue">0</div>
+                <div class="metric-sub" id="mQueueSub">Dropped: 0</div>
+            </div>
+            <div class="metric-card green">
+                <div class="metric-label">Reward</div>
+                <div class="metric-value" id="mReward">0.00</div>
+                <div class="metric-sub" id="mRewardSub">Cumulative: 0</div>
+            </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-grid">
+            <div class="chart-card">
+                <div class="chart-title"><span class="dot" style="background:var(--accent-blue)"></span> CPU & Memory Utilization</div>
+                <canvas id="chartCpuMem"></canvas>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title"><span class="dot" style="background:var(--accent-green)"></span> Latency (ms)</div>
+                <canvas id="chartLatency"></canvas>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title"><span class="dot" style="background:var(--accent-purple)"></span> Request Rate & Queue</div>
+                <canvas id="chartTraffic"></canvas>
+            </div>
+            <div class="chart-card">
+                <div class="chart-title"><span class="dot" style="background:var(--accent-amber)"></span> Pods & Nodes</div>
+                <canvas id="chartResources"></canvas>
+            </div>
+        </div>
+
+        <!-- Spike Injection + Events -->
+        <div class="bottom-grid">
+            <div class="spike-panel">
+                <div class="spike-title">⚡ Inject Traffic Spike</div>
+                <div class="spike-buttons">
+                    <button class="spike-btn flash" onclick="injectSpike('flash_crowd')">
+                        <span class="icon">🔥</span>
+                        <span>Flash Crowd</span>
+                        <span class="desc">Sudden viral traffic burst</span>
+                    </button>
+                    <button class="spike-btn ddos" onclick="injectSpike('ddos')">
+                        <span class="icon">💀</span>
+                        <span>DDoS Attack</span>
+                        <span class="desc">Repeated micro-bursts</span>
+                    </button>
+                    <button class="spike-btn ramp" onclick="injectSpike('gradual_ramp')">
+                        <span class="icon">📈</span>
+                        <span>Gradual Ramp</span>
+                        <span class="desc">Marketing campaign traffic</span>
+                    </button>
+                    <button class="spike-btn herd" onclick="injectSpike('thundering_herd')">
+                        <span class="icon">🐘</span>
+                        <span>Thundering Herd</span>
+                        <span class="desc">Cache stampede / recovery</span>
+                    </button>
+                </div>
+            </div>
+            <div class="events-panel">
+                <div class="spike-title">📋 Infrastructure Events</div>
+                <div id="eventsLog">
+                    <div style="color:var(--text-muted);font-size:12px;padding:20px 0;text-align:center;">No events yet — reset and run the environment</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        const API = '';
+        let autoPlayInterval = null;
+        let allEvents = [];
+
+        // Chart.js global config
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.borderColor = 'rgba(42,53,80,0.5)';
+        Chart.defaults.font.family = "'Inter', sans-serif";
+        Chart.defaults.font.size = 11;
+
+        const chartOpts = (yTitle, sugMax) => ({
+            responsive: true,
+            maintainAspectRatio: true,
+            animation: { duration: 200 },
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { display: true, position: 'top', labels: { boxWidth: 10, padding: 12, usePointStyle: true } } },
+            scales: {
+                x: { title: { display: true, text: 'Step', font: { size: 10 } }, grid: { display: false }, ticks: { maxTicksLimit: 15 } },
+                y: { title: { display: true, text: yTitle, font: { size: 10 } }, suggestedMin: 0, suggestedMax: sugMax, grid: { color: 'rgba(42,53,80,0.3)' } }
+            }
+        });
+
+        // Initialize charts
+        const cpuMemChart = new Chart(document.getElementById('chartCpuMem'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'CPU %', data: [], borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Memory %', data: [], borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 }
+                ]
+            },
+            options: chartOpts('Utilization %', 100)
+        });
+
+        const latencyChart = new Chart(document.getElementById('chartLatency'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Latency', data: [], borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+                    { label: 'SLA Target', data: [], borderColor: '#ef4444', borderDash: [6,4], borderWidth: 1.5, pointRadius: 0, fill: false }
+                ]
+            },
+            options: chartOpts('ms', 300)
+        });
+
+        const trafficChart = new Chart(document.getElementById('chartTraffic'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Request Rate', data: [], borderColor: '#8b5cf6', backgroundColor: 'rgba(139,92,246,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Queue', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1' }
+                ]
+            },
+            options: {
+                ...chartOpts('req/s', 2000),
+                scales: {
+                    ...chartOpts('req/s', 2000).scales,
+                    y1: { position: 'right', title: { display: true, text: 'Queue', font: { size: 10 } }, suggestedMin: 0, grid: { display: false } }
+                }
+            }
+        });
+
+        const resourceChart = new Chart(document.getElementById('chartResources'), {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    { label: 'Active Pods', data: [], borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2 },
+                    { label: 'Active Nodes', data: [], borderColor: '#06b6d4', backgroundColor: 'rgba(6,182,212,0.08)', fill: true, tension: 0.3, pointRadius: 0, borderWidth: 2, yAxisID: 'y1' }
+                ]
+            },
+            options: {
+                ...chartOpts('Pods', 15),
+                scales: {
+                    ...chartOpts('Pods', 15).scales,
+                    y1: { position: 'right', title: { display: true, text: 'Nodes', font: { size: 10 } }, suggestedMin: 0, suggestedMax: 8, grid: { display: false } }
+                }
+            }
+        });
+
+        // Data arrays
+        let labels = [], cpuData = [], memData = [], latData = [], slaData = [];
+        let reqData = [], queueData = [], podData = [], nodeData = [];
+        let currentSLA = 250;
+
+        function updateCharts(obs) {
+            const step = obs.time_step || 0;
+            labels.push(step);
+            cpuData.push(((obs.cpu_utilization || 0) * 100).toFixed(1));
+            memData.push(((obs.memory_utilization || 0) * 100).toFixed(1));
+            latData.push((obs.latency_ms || 0).toFixed(1));
+            // get SLA from metadata or default
+            slaData.push(currentSLA);
+            reqData.push((obs.request_rate || 0).toFixed(0));
+            queueData.push(obs.queue_length || 0);
+            podData.push(obs.active_pods || 0);
+            const ni = obs.node_info || {};
+            nodeData.push(ni.active_nodes || 0);
+
+            // trim to last 200 points
+            const MAX = 200;
+            if (labels.length > MAX) {
+                labels = labels.slice(-MAX); cpuData = cpuData.slice(-MAX); memData = memData.slice(-MAX);
+                latData = latData.slice(-MAX); slaData = slaData.slice(-MAX);
+                reqData = reqData.slice(-MAX); queueData = queueData.slice(-MAX);
+                podData = podData.slice(-MAX); nodeData = nodeData.slice(-MAX);
+            }
+
+            cpuMemChart.data.labels = labels;
+            cpuMemChart.data.datasets[0].data = cpuData;
+            cpuMemChart.data.datasets[1].data = memData;
+            cpuMemChart.update('none');
+
+            latencyChart.data.labels = labels;
+            latencyChart.data.datasets[0].data = latData;
+            latencyChart.data.datasets[1].data = slaData;
+            latencyChart.update('none');
+
+            trafficChart.data.labels = labels;
+            trafficChart.data.datasets[0].data = reqData;
+            trafficChart.data.datasets[1].data = queueData;
+            trafficChart.update('none');
+
+            resourceChart.data.labels = labels;
+            resourceChart.data.datasets[0].data = podData;
+            resourceChart.data.datasets[1].data = nodeData;
+            resourceChart.update('none');
+        }
+
+        function updateMetrics(obs) {
+            const cpu = ((obs.cpu_utilization || 0) * 100).toFixed(1);
+            const mem = ((obs.memory_utilization || 0) * 100).toFixed(1);
+            document.getElementById('mCpu').textContent = cpu + '%';
+            document.getElementById('mCpu').style.color = cpu > 85 ? 'var(--accent-red)' : cpu > 60 ? 'var(--accent-amber)' : 'var(--accent-green)';
+            document.getElementById('mCpuSub').textContent = cpu > 85 ? '⚠ High pressure' : cpu > 60 ? 'Moderate load' : 'Healthy';
+
+            document.getElementById('mMem').textContent = mem + '%';
+            document.getElementById('mMem').style.color = mem > 85 ? 'var(--accent-red)' : mem > 60 ? 'var(--accent-amber)' : 'var(--accent-cyan)';
+            document.getElementById('mMemSub').textContent = mem > 85 ? '⚠ Memory pressure' : 'Normal';
+
+            const lat = (obs.latency_ms || 0).toFixed(1);
+            document.getElementById('mLat').textContent = lat + ' ms';
+            document.getElementById('mLat').style.color = lat > currentSLA ? 'var(--accent-red)' : 'var(--accent-green)';
+            document.getElementById('mLatSub').textContent = `SLA: ${currentSLA}ms | Violations: ${obs.total_sla_violations || 0}`;
+
+            document.getElementById('mReq').textContent = (obs.request_rate || 0).toFixed(0);
+            document.getElementById('mPods').textContent = obs.active_pods || 0;
+            const pri = obs.pod_resource_info || {};
+            const podSub = `Size: ${pri.pod_size || 'sm'}${pri.vpa_restart_in_progress ? ' ⟳ restarting' : ''}`;
+            document.getElementById('mPodsSub').textContent = podSub;
+
+            const ni = obs.node_info || {};
+            document.getElementById('mNodes').textContent = ni.active_nodes || 0;
+            document.getElementById('mNodesSub').textContent = `CPU: ${(ni.node_cpu_used||0).toFixed(1)}/${(ni.node_cpu_capacity||0).toFixed(0)} vCPU`;
+
+            document.getElementById('mQueue').textContent = obs.queue_length || 0;
+            document.getElementById('mQueueSub').textContent = `Dropped: ${obs.total_requests_dropped || 0}`;
+
+            const rew = (obs.reward || 0).toFixed(2);
+            document.getElementById('mReward').textContent = rew;
+            document.getElementById('mReward').style.color = rew >= 0 ? 'var(--accent-green)' : 'var(--accent-red)';
+            document.getElementById('mRewardSub').textContent = `Cumulative: ${(obs.cumulative_reward || 0).toFixed(1)}`;
+
+            document.getElementById('stepCounter').textContent = obs.time_step || 0;
+            document.getElementById('horizonCounter').textContent = obs.horizon || 180;
+
+            if (obs.done) {
+                document.getElementById('statusText').textContent = 'Episode Done';
+                stopAutoPlay();
+            }
+
+            // Update events
+            const events = obs.recent_events || [];
+            if (events.length > 0) {
+                for (const e of events) {
+                    const key = `${e.step}-${e.event_type}-${e.details}`;
+                    if (!allEvents.find(x => x.key === key)) {
+                        allEvents.push({ ...e, key });
+                    }
+                }
+                renderEvents();
+            }
+        }
+
+        function renderEvents() {
+            const log = document.getElementById('eventsLog');
+            const recent = allEvents.slice(-30).reverse();
+            log.innerHTML = recent.map(e => `
+                <div class="event-item">
+                    <span class="event-step">T=${e.step}</span>
+                    <span class="event-badge ${e.event_type}">${e.event_type.replace(/_/g,' ')}</span>
+                    <span class="event-details">${e.details}</span>
+                </div>
+            `).join('');
+        }
+
+        // --- API calls ---
+
+        async function resetEnv() {
+            stopAutoPlay();
+            const task = document.getElementById('taskSelect').value;
+            labels = []; cpuData = []; memData = []; latData = []; slaData = [];
+            reqData = []; queueData = []; podData = []; nodeData = [];
+            allEvents = [];
+            document.getElementById('eventsLog').innerHTML = '';
+
+            // Set SLA based on task
+            const slaMap = { easy: 250, medium: 180, hard: 120 };
+            currentSLA = slaMap[task] || 250;
+
+            try {
+                const res = await fetch(API + '/dashboard/reset', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ task })
+                });
+                const data = await res.json();
+                const obs = data.observation;
+                updateMetrics(obs);
+                updateCharts(obs);
+                document.getElementById('statusText').textContent = `Running (${task})`;
+                showToast(`Environment reset — ${task} task`, 'success');
+            } catch (err) {
+                showToast('Failed to reset: ' + err.message, 'error');
+            }
+        }
+
+        async function manualStep() {
+            const sd = parseInt(document.getElementById('scaleDelta').value);
+            const nd = parseInt(document.getElementById('nodeDelta').value);
+            const ps = document.getElementById('podSize').value || null;
+            try {
+                const res = await fetch(API + '/dashboard/step', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scale_delta: sd, node_delta: nd, pod_size: ps })
+                });
+                const data = await res.json();
+                updateMetrics(data.observation);
+                updateCharts(data.observation);
+            } catch (err) {
+                showToast('Step failed: ' + err.message, 'error');
+            }
+        }
+
+        async function autoRun(n) {
+            try {
+                const res = await fetch(API + '/dashboard/auto_run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ steps: n })
+                });
+                const data = await res.json();
+                // Fetch full history to update charts
+                const histRes = await fetch(API + '/dashboard/history');
+                const histData = await histRes.json();
+                // Rebuild charts from history
+                labels = []; cpuData = []; memData = []; latData = []; slaData = [];
+                reqData = []; queueData = []; podData = []; nodeData = [];
+                for (const obs of histData.history) {
+                    updateCharts(obs);
+                }
+                if (histData.history.length > 0) {
+                    updateMetrics(histData.history[histData.history.length - 1]);
+                }
+                showToast(`Ran ${data.steps_taken} steps`, 'info');
+            } catch (err) {
+                showToast('Auto-run failed: ' + err.message, 'error');
+            }
+        }
+
+        let isAutoPlaying = false;
+        function toggleAutoPlay() {
+            if (isAutoPlaying) { stopAutoPlay(); } else { startAutoPlay(); }
+        }
+        function startAutoPlay() {
+            isAutoPlaying = true;
+            document.getElementById('autoPlayBtn').textContent = '⏸ Pause';
+            document.getElementById('autoPlayBtn').classList.add('btn-red');
+            document.getElementById('autoPlayBtn').classList.remove('btn-amber');
+            autoPlayInterval = setInterval(async () => {
+                await manualStep();
+            }, 400);
+        }
+        function stopAutoPlay() {
+            isAutoPlaying = false;
+            if (autoPlayInterval) { clearInterval(autoPlayInterval); autoPlayInterval = null; }
+            document.getElementById('autoPlayBtn').textContent = '⏯ Auto-Play';
+            document.getElementById('autoPlayBtn').classList.remove('btn-red');
+            document.getElementById('autoPlayBtn').classList.add('btn-amber');
+        }
+
+        async function injectSpike(type) {
+            try {
+                const res = await fetch(API + '/dashboard/inject_spike', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ spike_type: type })
+                });
+                const data = await res.json();
+                if (data.error) { showToast(data.error, 'error'); return; }
+                showToast(`💥 Injected ${type.replace(/_/g,' ')} — ${data.multiplier}x for ${data.duration} steps`, 'info');
+            } catch (err) {
+                showToast('Spike injection failed: ' + err.message, 'error');
+            }
+        }
+
+        function showToast(msg, type = 'info') {
+            const t = document.getElementById('toast');
+            t.textContent = msg;
+            t.className = 'toast show ' + type;
+            setTimeout(() => { t.classList.remove('show'); }, 3000);
+        }
+
+        // Auto-reset on load
+        resetEnv();
+    </script>
+</body>
+</html>

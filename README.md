@@ -19,22 +19,22 @@ tags:
 # CloudScaleRL / AutoScaleOps
 **OpenEnv Cloud Autoscaling Environment Server**
 
-A real-world inspired cloud autoscaling simulation for reinforcement learning and LLM-based decision-making, built for OpenEnv and the Meta PyTorch OpenEnv Hackathon.
+A real-world inspired Kubernetes autoscaling simulation for reinforcement learning and LLM-based decision-making, built for OpenEnv and the Meta PyTorch OpenEnv Hackathon.
 
 ---
 
 # 🧠 What is CloudScaleRL / AutoScaleOps?
 
-CloudScaleRL (AutoScaleOps) is a reinforcement learning environment that simulates real-world cloud autoscaling decisions, where an agent acts like a **Site Reliability Engineer (SRE)** managing infrastructure under uncertainty.
+CloudScaleRL (AutoScaleOps) is a reinforcement learning environment that simulates real-world Kubernetes cloud autoscaling decisions, where an agent acts like a **Site Reliability Engineer (SRE)** managing infrastructure under uncertainty.
 
-The environment models operational tradeoffs with:
-- stochastic incoming traffic 📈
-- delayed scaling effects ⏳
-- queue growth under overload 📦
-- latency vs cost penalties 💸
-- stability and oscillation constraints ⚠️
+The environment models realistic Kubernetes operational tradeoffs with:
+- **Worker Nodes** with CPU/memory capacity constraints and failures.
+- **Horizontal Pod Autoscaling (HPA)** for dynamic pod scaling.
+- **Vertical Pod Autoscaling (VPA)** for adjusting pod resource sizes.
+- **Realistic Traffic Spikes** including Flash Crowds 🔥, DDoS Attacks 💀, Gradual Ramps 📈, and Thundering Herds 🐘.
+- **Delayed Provisioning** modelling real-world infrastructure latency.
 
-The objective is to maximize service quality while minimizing cloud spend and system instability.
+**🔮 Future Roadmap:** Currently the project uses heuristic fallback policies. In the near future, we will deeply integrate LLMs for the **reasoning part** of the autoscaling workflow (rather than hardcoding rules), allowing true Agentic SRE management!
 
 ---
 
@@ -46,10 +46,17 @@ uv sync
 uv run python -m server.app
 ```
 
+## 📊 Access the Interactive Dashboard
+Once the server is running, experience the environment visually through the premium interactive dashboard!
+
+1. Open your browser and go to: **[http://localhost:8000/dashboard](http://localhost:8000/dashboard)**
+2. Click **"Run 10"** or **"Auto-Play"** to see live metrics and charts.
+3. Inject real-world anomalies like **Flash Crowds** or **DDoS Attacks** using the control panel to see how the system reacts!
+
 ## Run baseline evaluation
 In another terminal:
 ```bash
-uv run python scripts/run_baseline.py --url http://localhost:8000 --task easy --policy performance
+uv run python scripts/run_baseline.py --url http://localhost:8000 --task easy --policy hybrid
 ```
 
 ## Run tests
@@ -64,104 +71,70 @@ uv run pytest tests/ -v
 
 All tasks use fixed seeds for deterministic evaluation.
 
-| Task   | Description                              | Initial Pods | Horizon | Latency SLA | Difficulty |
-|--------|------------------------------------------|-------------:|--------:|------------:|-----------|
-| easy   | Stable traffic, relaxed constraints      | 3            | 180     | 250 ms      | Intro / low volatility |
-| medium | Bursty demand, tighter latency target    | 4            | 240     | 180 ms      | Moderate operational pressure |
-| hard   | Adversarial spikes, delayed consequences | 4            | 300     | 120 ms      | High volatility and strong tradeoffs |
+| Task   | Description                              | Nodes | Pods | Horizon | Latency SLA | Difficulty |
+|--------|------------------------------------------|-------|-----:|--------:|------------:|-----------|
+| easy   | Stable traffic, relaxed constraints      | 2     | 3    | 180     | 250 ms      | Intro / low volatility |
+| medium | Bursty demand, tighter latency target    | 2     | 4    | 240     | 180 ms      | Moderate operational pressure |
+| hard   | Adversarial spikes, node failures        | 3     | 4    | 300     | 120 ms      | High volatility and strong tradeoffs |
 
 ---
 
 # 🎮 Action Space Definition
 
-**Action type:** `CloudScaleAction`
-
-The agent controls autoscaling through a discrete scaling delta.
+The agent controls 3 dimensions of autoscaling, outputting a JSON object.
 
 | Field       | Type    | Description |
 |------------|---------|-------------|
-| scale_delta | integer | Number of pods to add/remove; one of `[-2, -1, 0, 1, 2]` |
-
-- `-2` → remove 2 pods (aggressive scale-down)
-- `-1` → remove 1 pod (conservative scale-down)
-- `0` → maintain current scale
-- `1` → add 1 pod (conservative scale-up)
-- `2` → add 2 pods (aggressive scale-up)
+| `scale_delta` | integer | (HPA) Number of pods to add/remove; `[-2, -1, 0, 1, 2]` |
+| `node_delta`  | integer | (Cluster Autoscaler) Add/remove nodes; `[-1, 0, 1]` |
+| `pod_size`    | string  | (VPA) Set pod resource tier; `'xs', 'sm', 'md', 'lg'` or `null` |
 
 ---
 
 # 👀 Observation Space Definition
 
-**Observation type:** `CloudScaleObservation`
-
 Includes complete infrastructure state and KPI counters:
 - **time_step / horizon**
-- **cpu_utilization**: Aggregate CPU load (0.0-1.0)
-- **latency_ms**: Current average request latency
-- **request_rate**: Real-time incoming traffic
+- **cpu_utilization / memory_utilization**: Aggregate resource load
+- **latency_ms & request_rate**: Real-time traffic KPIs
 - **queue_length**: Current backlog of unprocessed requests
-- **active_pods**: Number of pods serving traffic now
-- **pending_scale_ups/downs**: Count of in-flight scaling events
+- **active_pods & node_info**: Infrastructure state and nodes provisioning limits
+- **pod_resource_info**: Current VPA configuration
+- **recent_events**: Array of infrastructure events (e.g. `node_failure`, `flash_crowd`)
 - **totals**: processed, dropped, and SLA violations
-- **average_latency_ms**: Cumulative performance metric
 - **reward**: current step reward and cumulative reward
 
 ---
 
-# 🏆 Reward Design
+# 🏆 Reward & Grader Design
 
-Dense reward is applied every step to encourage efficiency and reliability:
-- **SLA Compliance**: Bonus for latency <= target, penalty for exceeding it.
-- **Cost Efficiency**: Penalty proportional to the number of active pods.
-- **Queue Control**: Linear penalty for backlog growth.
-- **Stability**: Penalty for frequent or large scaling actions.
-- **Invalid Action**: Fixed penalty for attempting to scale below 1 pod.
-
----
-
-# 📏 Grader
-
-`/grader` returns a deterministic score in `[0, 1]` based on:
-- **SLA Compliance**: Percentage of steps within latency target.
-- **Efficiency**: Normalized pod usage vs. capacity.
-- **Service Quality**: Penalty for dropped requests.
-- **Response Speed**: Reward for lower average latency.
-
----
-
-# 📈 Baseline Scores (Policy Benchmarks)
-
-| Task   | Policy      | Score | SLA Compliance | Avg Latency | Avg Pods |
-|--------|-------------|------:|---------------:|------------:|---------:|
-| easy   | threshold   | 0.82  | 98.2%          | 145 ms      | 3.6      |
-| easy   | performance | 0.88  | 99.5%          | 130 ms      | 3.9      |
-| medium | threshold   | 0.74  | 91.3%          | 182 ms      | 4.7      |
-| medium | performance | 0.84  | 96.1%          | 160 ms      | 4.9      |
-| hard   | threshold   | 0.61  | 74.5%          | 215 ms      | 5.2      |
-| hard   | performance | 0.76  | 86.8%          | 178 ms      | 5.8      |
+The `/grader` returns a normalized score in `[0, 1]`. Dense reward is applied every step based on:
+- **SLA Compliance (40%)**: Bonus for latency <= target, penalty for exceeding it.
+- **Pod Efficiency (20%)**: Minimizing unnecessary pods.
+- **Latency Quality (10%)**: Staying well under the SLA threshold.
+- **Node Efficiency (10%)**: Minimizing unused worker nodes.
+- **Resource Utilization (10%)**: Keeping CPU/Memory in the 40-75% sweet spot.
+- **Drop Penalty (10%)**: Penalizing queue overflow.
 
 ---
 
 # 🤖 LLM Inference Results (Example Runs)
 
-Using `inference.py` with `gpt-4o`:
+Using `inference.py` with `Qwen2.5-72B-Instruct`:
 
-| Task   | Horizon | Steps | Done | Score |
-|--------|--------:|------:|------|------:|
-| easy   | 180     | 180   | true | 0.91  |
-| medium | 240     | 240   | true | 0.85  |
-| hard   | 300     | 300   | true | 0.74  |
+| Task   | Steps | Success | Score |
+|--------|------:|---------|------:|
+| easy   | 15    | true    | 0.908 |
+| medium | 15    | true    | 0.575 |
+| hard   | 15    | false   | 0.240 |
 
 ---
 
 # 🧠 Inference Script (Submission Path)
 
 Root `inference.py` is the script used by evaluators.
-
 - Uses OpenAI-compatible client
-- Emits strict logs: `[START]`, `[STEP]`, `[END]`
 - Required variables: `API_BASE_URL`, `MODEL_NAME`, `HF_TOKEN`
-- Optional variables: `BENCHMARK_URL`, `MAX_STEPS`
 
 ## Reproduce Inference Runs
 ```bash
@@ -174,41 +147,9 @@ uv run python inference.py
 
 ---
 
-# 🗂️ Project Structure
-
-```text
-cloudscale_rl/
-├── README.md
-├── openenv.yaml
-├── pyproject.toml
-├── inference.py         # LLM SRE Agent
-├── client.py            # OpenEnv Client
-├── models.py            # Pydantic Schemas
-├── decision.py          # Baseline Policies
-├── scripts/
-│   └── run_baseline.py  # Local Tester
-├── server/
-│   ├── app.py           # FastAPI Server
-│   ├── cloudscale_rl_environment.py  # Core Simulation
-│   ├── grader.py        # Scoring Logic
-│   └── __init__.py
-└── tests/               # Unit and Integration Tests
-```
-
----
-
-# 🧑‍⚖️ How A Judge Will Run This
-
-1. Start Environment: `uv run python -m server.app`.
-2. Set Environment Variables (`API_BASE_URL`, etc).
-3. Run Inference: `uv run python inference.py`.
-4. Parse `[END]` logs for final scores.
-
----
-
 # ☁️ Hugging Face Spaces
 
 Deploy using `openenv push`. After deployment, the following standard OpenEnv routes will be available:
 - `POST /reset`
 - `POST /step`
-- `/tasks`, `/grader`, `/baseline`
+- `/tasks`, `/grader`, `/dashboard`

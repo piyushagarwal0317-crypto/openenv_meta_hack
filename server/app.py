@@ -3,9 +3,12 @@
 
 """
 FastAPI application for the CloudScaleRL / AutoScaleOps Environment.
+Includes interactive dashboard and spike injection API.
 """
 
+import os
 from fastapi import Body, HTTPException
+from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Dict, Any
 
 try:
@@ -33,6 +36,117 @@ app = create_app(
     env_name="cloudscale_rl",
     max_concurrent_envs=10,
 )
+
+# ---------------------------------------------------------------------------
+# Dashboard environment (separate instance for interactive dashboard use)
+# ---------------------------------------------------------------------------
+
+_dashboard_env: CloudScaleEnvironment | None = None
+_dashboard_history: list[dict] = []
+
+
+def _get_dashboard_env(task: str = "easy") -> CloudScaleEnvironment:
+    global _dashboard_env
+    if _dashboard_env is None:
+        _dashboard_env = CloudScaleEnvironment(task=task)
+    return _dashboard_env
+
+
+def _obs_to_dict(obs: CloudScaleObservation) -> dict:
+    if hasattr(obs, "model_dump"):
+        return obs.model_dump()
+    return dict(obs)
+
+
+# ---------------------------------------------------------------------------
+# Dashboard API endpoints
+# ---------------------------------------------------------------------------
+
+@app.post("/dashboard/reset")
+async def dashboard_reset(body: Dict[str, Any] = Body(default={})):
+    """Reset the dashboard environment."""
+    global _dashboard_env, _dashboard_history
+    task = body.get("task", "easy")
+    _dashboard_env = CloudScaleEnvironment(task=task)
+    _dashboard_history = []
+    obs = _dashboard_env.reset(task=task)
+    data = _obs_to_dict(obs)
+    _dashboard_history.append(data)
+    return {"observation": data, "history_length": len(_dashboard_history)}
+
+
+@app.post("/dashboard/step")
+async def dashboard_step(body: Dict[str, Any] = Body(default={})):
+    """Take a step in the dashboard environment."""
+    env = _get_dashboard_env()
+    scale_delta = body.get("scale_delta", 0)
+    node_delta = body.get("node_delta", 0)
+    pod_size = body.get("pod_size", None)
+    action = CloudScaleAction(scale_delta=scale_delta, node_delta=node_delta, pod_size=pod_size)
+    obs = env.step(action)
+    data = _obs_to_dict(obs)
+    _dashboard_history.append(data)
+    return {"observation": data, "history_length": len(_dashboard_history)}
+
+
+@app.post("/dashboard/inject_spike")
+async def dashboard_inject_spike(body: Dict[str, Any] = Body(...)):
+    """Inject a traffic spike into the dashboard environment."""
+    env = _get_dashboard_env()
+    spike_type = body.get("spike_type", "flash_crowd")
+    multiplier = float(body.get("multiplier", 0))
+    duration = int(body.get("duration", 0))
+    result = env.inject_spike(spike_type, multiplier, duration)
+    return result
+
+
+@app.get("/dashboard/history")
+async def dashboard_history():
+    """Get the full step history for charting."""
+    return {"history": _dashboard_history}
+
+
+@app.post("/dashboard/auto_run")
+async def dashboard_auto_run(body: Dict[str, Any] = Body(default={})):
+    """Run multiple steps automatically with the hybrid policy."""
+    from decision import choose_heuristic
+    env = _get_dashboard_env()
+    steps = min(int(body.get("steps", 10)), 50)
+    results = []
+    for _ in range(steps):
+        obs = env._build_observation(done=False)
+        action = choose_heuristic("hybrid", obs)
+        obs = env.step(action)
+        data = _obs_to_dict(obs)
+        _dashboard_history.append(data)
+        results.append({
+            "action": {"scale_delta": action.scale_delta, "node_delta": action.node_delta,
+                        "pod_size": action.pod_size},
+            "reward": data.get("reward", 0),
+        })
+        if data.get("done", False):
+            break
+    return {"steps_taken": len(results), "results": results, "history_length": len(_dashboard_history)}
+
+
+# ---------------------------------------------------------------------------
+# Serve dashboard HTML
+# ---------------------------------------------------------------------------
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def serve_dashboard():
+    """Serve the interactive CloudScaleRL dashboard."""
+    dashboard_path = os.path.join(os.path.dirname(__file__), "dashboard.html")
+    try:
+        with open(dashboard_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    except FileNotFoundError:
+        return HTMLResponse(content="<h1>Dashboard not found</h1>", status_code=404)
+
+
+# ---------------------------------------------------------------------------
+# Existing endpoints
+# ---------------------------------------------------------------------------
 
 @app.get("/tasks")
 async def get_tasks():
@@ -67,9 +181,5 @@ def main(host: str = "0.0.0.0", port: int = 8000):
     import uvicorn
     uvicorn.run(app, host=host, port=port)
 
-if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8000)
-    args = parser.parse_args()
-    main(port=args.port)
+if __name__ == '__main__':
+    main()
