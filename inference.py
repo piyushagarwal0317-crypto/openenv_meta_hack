@@ -36,7 +36,7 @@ MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
 
 BENCHMARK_URL = os.getenv("BENCHMARK_URL", "http://localhost:8000")
 BENCHMARK = os.getenv("BENCHMARK", "cloudscale_rl")
-MAX_STEPS = int(os.getenv("MAX_STEPS", "0"))
+MAX_STEPS = int(os.getenv("MAX_STEPS", "15"))
 TEMPERATURE = float(os.getenv("TEMPERATURE", "0.1"))
 MAX_TOKENS = int(os.getenv("MAX_TOKENS", "150"))
 TASKS = ["easy", "medium", "hard"]
@@ -244,6 +244,7 @@ def choose_action_with_llm(
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
             stream=False,
+            timeout=5.0,
         )
         content = (completion.choices[0].message.content or "").strip()
         action = parse_action(content)
