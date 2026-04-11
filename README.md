@@ -34,7 +34,7 @@ The environment models realistic Kubernetes operational tradeoffs with:
 - **Realistic Traffic Spikes** including Flash Crowds 🔥, DDoS Attacks 💀, Gradual Ramps 📈, and Thundering Herds 🐘.
 - **Delayed Provisioning** modelling real-world infrastructure latency.
 
-**🔮 Future Roadmap:** Currently the project uses heuristic fallback policies. In the near future, we will deeply integrate LLMs for the **reasoning part** of the autoscaling workflow (rather than hardcoding rules), allowing true Agentic SRE management!
+**🔮 Future Roadmap:** Currently the project uses heuristic fallback policies. In the near future, we will implement an LLM-first **reasoning model** for the autoscaling workflow (instead of hardcoding rules), and fine-tune it on publicly available cloud-provider knowledge (for example Azure and Alibaba documentation) as well as open sources like Wikipedia to enable stronger real-world SRE decision-making.
 
 ---
 

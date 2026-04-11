@@ -472,6 +472,11 @@
                 <div class="metric-value" id="mReward">0.00</div>
                 <div class="metric-sub" id="mRewardSub">Cumulative: 0</div>
             </div>
+            <div class="metric-card blue">
+                <div class="metric-label">Overall Grade</div>
+                <div class="metric-value" id="mGrade">--</div>
+                <div class="metric-sub" id="mGradeSub">Episode score (0-1)</div>
+            </div>
         </div>
 
         <!-- Charts -->
@@ -620,6 +625,64 @@
         let labels = [], cpuData = [], memData = [], latData = [], slaData = [];
         let reqData = [], queueData = [], podData = [], nodeData = [];
         let currentSLA = 250;
+        let lastGradedStep = -1;
+
+        function avg(values) {
+            if (!values || values.length === 0) return 0;
+            return values.reduce((a, b) => a + b, 0) / values.length;
+        }
+
+        async function refreshGrade(obs, force = false) {
+            const step = obs.time_step || 0;
+            if (step <= 0) return;
+            if (!force && step === lastGradedStep) return;
+            if (!force && !obs.done && step % 5 !== 0) return;
+
+            try {
+                const histRes = await fetch(API + '/dashboard/history');
+                const histData = await histRes.json();
+                const history = histData.history || [];
+                if (history.length < 2) return;
+
+                const last = history[history.length - 1];
+                const task = last.task_id || 'easy';
+                const slaTarget = task === 'hard' ? 120 : task === 'medium' ? 180 : 250;
+
+                const metrics = {
+                    total_steps: Math.max(1, Number(last.time_step || 1)),
+                    total_sla_violations: Number(last.total_sla_violations || 0),
+                    average_latency_ms: avg(history.slice(1).map(x => Number(x.latency_ms || 0))),
+                    average_pods: avg(history.slice(1).map(x => Number(x.active_pods || 0))),
+                    total_dropped_requests: Number(last.total_requests_dropped || 0),
+                    sla_target_ms: slaTarget,
+                    average_nodes: avg(history.slice(1).map(x => Number((x.node_info || {}).active_nodes || 0))),
+                    average_cpu_utilization: avg(history.slice(1).map(x => Number(x.cpu_utilization || 0))),
+                    average_memory_utilization: avg(history.slice(1).map(x => Number(x.memory_utilization || 0))),
+                    total_node_failures: history.reduce(
+                        (acc, x) => acc + ((x.recent_events || []).filter(e => e.event_type === 'node_failure').length),
+                        0,
+                    ),
+                };
+
+                const gradeRes = await fetch(API + '/grader', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(metrics),
+                });
+                if (!gradeRes.ok) return;
+                const grade = await gradeRes.json();
+                const score = Number(grade.score || 0);
+
+                document.getElementById('mGrade').textContent = score.toFixed(3);
+                document.getElementById('mGradeSub').textContent = `Task: ${task} | Steps: ${metrics.total_steps}`;
+                document.getElementById('mGrade').style.color =
+                    score >= 0.75 ? 'var(--accent-green)' : score >= 0.5 ? 'var(--accent-amber)' : 'var(--accent-red)';
+
+                lastGradedStep = step;
+            } catch (err) {
+                // keep UI responsive even if grade endpoint is temporarily unavailable
+            }
+        }
 
         function updateCharts(obs) {
             const step = obs.time_step || 0;
@@ -707,6 +770,8 @@
                 stopAutoPlay();
             }
 
+            void refreshGrade(obs, obs.done);
+
             // Update events
             const events = obs.recent_events || [];
             if (events.length > 0) {
@@ -741,6 +806,10 @@
             reqData = []; queueData = []; podData = []; nodeData = [];
             allEvents = [];
             document.getElementById('eventsLog').innerHTML = '';
+            lastGradedStep = -1;
+            document.getElementById('mGrade').textContent = '--';
+            document.getElementById('mGradeSub').textContent = 'Episode score (0-1)';
+            document.getElementById('mGrade').style.color = 'var(--text-primary)';
 
             // Set SLA based on task
             const slaMap = { easy: 250, medium: 180, hard: 120 };

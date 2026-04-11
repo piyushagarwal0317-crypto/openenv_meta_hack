@@ -6,9 +6,10 @@ FastAPI application for the CloudScaleRL / AutoScaleOps Environment.
 Includes interactive dashboard and spike injection API.
 """
 
+import json
 import os
 from fastapi import Body, HTTPException
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from typing import Dict, Any
 
 try:
@@ -36,6 +37,25 @@ app = create_app(
     env_name="cloudscale_rl",
     max_concurrent_envs=10,
 )
+
+
+@app.middleware("http")
+async def _compat_step_payload(request, call_next):
+    if request.method == "POST" and request.url.path == "/step":
+        raw_body = await request.body()
+        if raw_body:
+            try:
+                payload = json.loads(raw_body)
+            except json.JSONDecodeError:
+                payload = None
+
+            if isinstance(payload, dict) and "action" not in payload:
+                action_keys = {"scale_delta", "node_delta", "pod_size"}
+                if action_keys.intersection(payload):
+                    wrapped_body = json.dumps({"action": payload}).encode("utf-8")
+                    request._body = wrapped_body
+                    request._stream_consumed = True
+    return await call_next(request)
 
 # ---------------------------------------------------------------------------
 # Dashboard environment (separate instance for interactive dashboard use)
@@ -132,6 +152,12 @@ async def dashboard_auto_run(body: Dict[str, Any] = Body(default={})):
 # ---------------------------------------------------------------------------
 # Serve dashboard HTML
 # ---------------------------------------------------------------------------
+
+
+@app.get("/")
+async def root():
+    """Redirect the default entry point to the dashboard."""
+    return RedirectResponse(url="/dashboard")
 
 @app.get("/dashboard", response_class=HTMLResponse)
 async def serve_dashboard():
