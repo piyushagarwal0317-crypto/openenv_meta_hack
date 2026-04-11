@@ -49,12 +49,26 @@ async def _compat_step_payload(request, call_next):
             except json.JSONDecodeError:
                 payload = None
 
-            if isinstance(payload, dict) and "action" not in payload:
-                action_keys = {"scale_delta", "node_delta", "pod_size"}
-                if action_keys.intersection(payload):
-                    wrapped_body = json.dumps({"action": payload}).encode("utf-8")
-                    request._body = wrapped_body
-                    request._stream_consumed = True
+            if isinstance(payload, dict):
+                action = payload.get("action")
+
+                # Accept OpenEnv docs examples that still use action.value.
+                if isinstance(action, dict) and "value" in action and "scale_delta" not in action:
+                    payload["action"] = {
+                        "scale_delta": action.get("value", 0),
+                        "node_delta": action.get("node_delta", 0),
+                        "pod_size": action.get("pod_size", None),
+                    }
+
+                # Accept flat dashboard-style payloads by wrapping them into action.
+                if "action" not in payload:
+                    action_keys = {"scale_delta", "node_delta", "pod_size"}
+                    if action_keys.intersection(payload):
+                        payload = {"action": payload, **{k: v for k, v in payload.items() if k not in action_keys}}
+
+                wrapped_body = json.dumps(payload).encode("utf-8")
+                request._body = wrapped_body
+                request._stream_consumed = True
     return await call_next(request)
 
 # ---------------------------------------------------------------------------
